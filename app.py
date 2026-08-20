@@ -32,7 +32,7 @@ st.set_page_config(page_title="Painel Fiscal Integrado", page_icon="📊", layou
 
 SEFAZ_LOGIN_URL = "https://nfe.sefaz.ba.gov.br/servicos/NFENC/SSL/ASLibrary/Login?ReturnUrl=%2fservicos%2fnfenc%2fModulos%2fAutenticado%2fRestrito%2fNFENC_consulta_destinatario.aspx"
 CERTIDAO_URL = "https://servicos.sefaz.ba.gov.br/sistemas/DSCRE/Modulos/Publico/EmissaoCertidao.aspx"
-FEDERAL_CERTIDAO_URL = "https://servicos.receitafederal.gov.br/servico/certidoes/"
+FEDERAL_CERTIDAO_URL = "https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj"
 SIMPLES_URL = "https://www8.receita.fazenda.gov.br/simplesnacional/aplicacoes.aspx?id=21"
 
 SEFAZ_COLUMNS = {
@@ -339,7 +339,7 @@ with st.sidebar:
     st.write("**Consultas externas**")
     st.link_button("Abrir portal NF-e / SEFAZ-BA", SEFAZ_LOGIN_URL)
     st.link_button("Emitir certidão SEFAZ-BA", CERTIDAO_URL)
-    st.link_button("Consultar Certidão Federal", FEDERAL_CERTIDAO_URL)
+    st.link_button("Abrir portal Certidão Federal", FEDERAL_CERTIDAO_URL)
     st.link_button("Consultar Simples Nacional", SIMPLES_URL)
     if get_supabase() is None and not mode_demo:
         st.warning("Configure SUPABASE_URL e SUPABASE_ANON_KEY em Secrets antes de usar o modo compartilhado.")
@@ -530,12 +530,12 @@ with cert_tab:
     active_company = st.session_state.get("company", {})
     active_cnpj = active_company.get("cnpj", "")
     active_name = active_company.get("razao_social", "")
-    st.markdown("### Certidão de Regularidade Fiscal Federal")
-    st.write("A consulta federal conjunta Receita Federal/PGFN informa a regularidade fiscal perante a Fazenda Nacional. O CNPJ da empresa ativa será usado como referência; a emissão ocorre no portal oficial.")
+    st.markdown("### Consulta Certidão Federal")
+    st.write("Consulta oficial de débitos relativos a créditos tributários federais e à Dívida Ativa da União, no mesmo padrão de acesso externo usado para a SEFAZ-BA.")
     federal_cols = st.columns([2, 1])
     federal_cols[0].text_input("CNPJ para consulta federal", value=format_cnpj(active_company.get("cnpj", "")) if active_company.get("cnpj") else "", disabled=True, key="federal_cnpj_display")
-    federal_cols[1].link_button("Abrir consulta federal", FEDERAL_CERTIDAO_URL, use_container_width=True)
-    st.caption("No portal oficial, selecione Pessoa Jurídica e informe o CNPJ exibido acima. Depois registre o resultado e anexe a certidão no formulário abaixo.")
+    federal_cols[1].link_button("Consultar Certidão Federal", FEDERAL_CERTIDAO_URL, use_container_width=True)
+    st.caption("O botão abre diretamente a tela oficial de consulta por CNPJ. Depois registre o resultado e anexe a certidão no formulário abaixo.")
     st.divider()
     if active_cnpj:
         st.info(f"Empresa selecionada: {active_name} — CNPJ preenchido automaticamente: {active_cnpj}")
