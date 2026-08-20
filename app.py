@@ -7,10 +7,15 @@ import json
 import os
 import re
 from typing import Any
+from urllib.parse import urljoin
+import base64
+import requests
+from bs4 import BeautifulSoup
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     from cryptography.fernet import Fernet
@@ -135,6 +140,74 @@ def parse_sefaz_csv(uploaded_file) -> pd.DataFrame:
         df["cnpj_emitente"] = df["cnpj_emitente"].map(clean_cnpj)
     df["origem_arquivo_hash"] = hashlib.sha256(raw).hexdigest()
     return df
+
+
+def emit_certidao_sefaz(cnpj: str) -> tuple[bytes | None, str, str]:
+    """Submete CNPJ ao formulário público oficial e retorna PDF ou mensagem."""
+    digits = clean_cnpj(cnpj)
+    if len(digits) != 14:
+        return None, "", "O CNPJ da empresa ativa precisa conter 14 dígitos."
+    try:
+        session = requests.Session()
+        response = session.get(CERTIDAO_URL, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        form = soup.find("form", {"id": "Form1"}) or soup.find("form")
+        if not form:
+            return None, "", "O formulário oficial da SEFAZ-BA não foi localizado."
+        payload = {}
+        for field in form.find_all("input"):
+            name = field.get("name")
+            if name and field.get("type", "text").lower() in {"hidden", "text"}:
+                payload[name] = field.get("value", "")
+        payload["ctl00$PHConteudo$TxtNumCNPJ"] = digits
+        payload["ctl00$PHConteudo$TxtNumInscricaoEstadual"] = ""
+        payload["ctl00$PHConteudo$TxtNumCPF"] = ""
+        payload["__EVENTTARGET"] = "ctl00$PHConteudo$btnImprimir"
+        payload["__EVENTARGUMENT"] = ""
+        result = session.post(CERTIDAO_URL, data=payload, headers={"Referer": CERTIDAO_URL}, timeout=45, allow_redirects=True)
+        content_type = result.headers.get("content-type", "").lower()
+        if "pdf" in content_type or result.content.startswith(b"%PDF"):
+            return result.content, f"certidao_sefaz_{digits}.pdf", ""
+        result_soup = BeautifulSoup(result.text, "html.parser")
+        pdf_link = None
+        for link in result_soup.find_all("a", href=True):
+            href = link.get("href", "")
+            if ".pdf" in href.lower() or "certid" in href.lower():
+                pdf_link = urljoin(CERTIDAO_URL, href)
+                break
+        if pdf_link:
+            pdf_response = session.get(pdf_link, headers={"Referer": CERTIDAO_URL}, timeout=45)
+            if pdf_response.content.startswith(b"%PDF") or "pdf" in pdf_response.headers.get("content-type", "").lower():
+                return pdf_response.content, f"certidao_sefaz_{digits}.pdf", ""
+        visible_text = " ".join(result_soup.stripped_strings)
+        if "Erro" in visible_text or "não" in visible_text.lower():
+            return None, "", visible_text[-500:]
+        return None, "", "A SEFAZ-BA não retornou um PDF diretamente. Verifique o resultado no portal oficial."
+    except requests.RequestException as exc:
+        return None, "", f"Falha de conexão com a SEFAZ-BA: {exc}"
+    except Exception as exc:
+        return None, "", f"Não foi possível processar a certidão: {exc}"
+
+
+def auto_download_pdf(pdf_bytes: bytes, filename: str) -> None:
+    encoded = base64.b64encode(pdf_bytes).decode("ascii")
+    components.html(
+        f"""<script>
+        const data = atob('{encoded}');
+        const bytes = new Uint8Array(data.length);
+        for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i);
+        const blob = new Blob([bytes], {{type: 'application/pdf'}});
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = '{filename}';
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {{ URL.revokeObjectURL(url); link.remove(); }}, 2000);
+        </script>""",
+        height=0,
+    )
 
 
 def format_brl(value: float) -> str:
@@ -410,7 +483,29 @@ with audit_tab:
 
 with cert_tab:
     st.subheader("Certidões e consultas externas")
-    st.write("Use os links oficiais para executar a consulta. Depois registre o resultado e anexe a evidência no sistema.")
+    active_company = st.session_state.get("company", {})
+    active_cnpj = active_company.get("cnpj", "")
+    active_name = active_company.get("razao_social", "")
+    if active_cnpj:
+        st.info(f"Empresa selecionada: {active_name} — CNPJ preenchido automaticamente: {active_cnpj}")
+    else:
+        st.warning("Selecione uma empresa na aba Cadastro e edição de empresas antes de emitir a certidão.")
+
+    if st.button("Emitir certidão SEFAZ-BA", type="primary", disabled=not bool(active_cnpj)):
+        with st.spinner("Consultando a emissão pública da SEFAZ-BA..."):
+            pdf_bytes, pdf_name, cert_error = emit_certidao_sefaz(active_cnpj)
+        if pdf_bytes:
+            st.session_state["last_cert_pdf"] = pdf_bytes
+            st.session_state["last_cert_filename"] = pdf_name
+            st.success("Certidão recebida. O download foi iniciado automaticamente.")
+            auto_download_pdf(pdf_bytes, pdf_name)
+            st.download_button("Baixar novamente a certidão", pdf_bytes, pdf_name, "application/pdf")
+        else:
+            st.error(cert_error)
+            st.link_button("Abrir emissão oficial da SEFAZ-BA", CERTIDAO_URL)
+
+    st.divider()
+    st.write("O CNPJ da empresa ativa é usado no formulário público oficial. Se o navegador bloquear o download automático, use o botão de fallback exibido após o retorno do PDF.")
     q1, q2 = st.columns(2)
     with q1:
         cert_type = st.selectbox("Tipo de certidão", ["Débitos tributários SEFAZ-BA", "Autenticidade de certidão", "Baixa de inscrição", "Outra"])
@@ -418,9 +513,9 @@ with cert_tab:
     with q2:
         cert_number = st.text_input("Número da certidão")
         cert_expiry = st.date_input("Validade, se houver", value=date.today())
-    cert_file = st.file_uploader("Evidência da certidão", type=["pdf", "png", "jpg"], key="cert_file")
+    cert_file = st.file_uploader("Evidência complementar da certidão", type=["pdf", "png", "jpg"], key="cert_file")
     if st.button("Registrar consulta de certidão"):
-        record = {"tipo": cert_type, "resultado": cert_status, "numero": cert_number, "validade": str(cert_expiry), "empresa_cnpj": st.session_state.get("company", {}).get("cnpj", "")}
+        record = {"tipo": cert_type, "resultado": cert_status, "numero": cert_number, "validade": str(cert_expiry), "empresa_cnpj": active_cnpj}
         if mode_demo:
             st.success("Consulta registrada no modo demonstrativo.")
         else:
