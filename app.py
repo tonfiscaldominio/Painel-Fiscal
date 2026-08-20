@@ -191,6 +191,17 @@ def supabase_insert(table: str, rows: list[dict[str, Any]]) -> tuple[bool, str]:
         return False, str(exc)
 
 
+def supabase_select(table: str, columns: str = "*") -> tuple[list[dict[str, Any]], str]:
+    client = get_supabase()
+    if not client:
+        return [], "Supabase não configurado."
+    try:
+        response = client.table(table).select(columns).order("created_at", desc=True).execute()
+        return response.data or [], ""
+    except Exception as exc:
+        return [], str(exc)
+
+
 st.title("Painel Fiscal Integrado")
 st.caption("Cadastro de empresas, consultas autorizadas, relatórios SEFAZ-BA e auditorias")
 
@@ -220,6 +231,27 @@ company_tab, sefaz_tab, audit_tab, cert_tab, reports_tab = st.tabs(["Cadastro da
 with company_tab:
     st.subheader("Cadastro compartilhado da empresa")
     st.write("Cadastre os dados operacionais da empresa. Senhas e certificados não devem ser colocados neste formulário nem em arquivos do GitHub.")
+
+    saved_companies: list[dict[str, Any]] = []
+    if mode_demo:
+        if st.session_state.get("company"):
+            saved_companies = [st.session_state["company"]]
+    else:
+        saved_companies, company_error = supabase_select("companies")
+        if company_error:
+            st.error(f"Não foi possível carregar as empresas salvas: {company_error}")
+
+    if saved_companies:
+        st.write("**Empresas cadastradas**")
+        labels = [f"{item.get('razao_social', 'Sem razão social')} — CNPJ {item.get('cnpj', 'não informado')}" for item in saved_companies]
+        selected_label = st.selectbox("Selecione a empresa ativa", labels, key="active_company_selector")
+        selected_index = labels.index(selected_label)
+        st.session_state["company"] = saved_companies[selected_index]
+        display_companies = pd.DataFrame(saved_companies).drop(columns=["cpf_responsavel_hash"], errors="ignore")
+        st.dataframe(display_companies, use_container_width=True, hide_index=True)
+    else:
+        st.info("Nenhuma empresa cadastrada ainda. Preencha o formulário abaixo para criar a primeira.")
+
     with st.form("company_form"):
         c1, c2 = st.columns(2)
         company_name = c1.text_input("Razão social")
@@ -231,12 +263,19 @@ with company_tab:
         save_company = st.form_submit_button("Salvar cadastro")
     if save_company:
         company = {"razao_social": company_name, "cnpj": clean_cnpj(cnpj), "cpf_responsavel_hash": hashlib.sha256(clean_cnpj(responsible_cpf).encode()).hexdigest() if responsible_cpf else "", "inscricao_estadual": state_registration, "municipio": city, "regime": regime}
-        st.session_state["company"] = company
-        if mode_demo:
-            st.success("Cadastro mantido em memória no modo demonstrativo.")
+        if not company["razao_social"] or not company["cnpj"]:
+            st.error("Informe pelo menos a razão social e o CNPJ.")
+        elif mode_demo:
+            st.session_state["company"] = company
+            st.success("Cadastro mantido em memória no modo demonstrativo. No modo compartilhado, ele será persistido no Supabase.")
         else:
             ok, msg = supabase_insert("companies", [company])
-            (st.success if ok else st.error)(msg)
+            if ok:
+                st.session_state["company"] = company
+                st.success("Empresa salva no Supabase. Ela aparecerá na lista de empresas cadastradas após a atualização da tela.")
+                st.rerun()
+            else:
+                st.error(msg)
     if st.session_state["company"]:
         st.info(f"Empresa ativa: {st.session_state['company'].get('razao_social') or 'não informada'} — CNPJ {st.session_state['company'].get('cnpj') or 'não informado'}")
 
