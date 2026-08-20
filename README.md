@@ -39,6 +39,8 @@ APP_PASSWORD = "defina-uma-senha-forte-para-a-equipe"
 
 `APP_PASSWORD` é uma senha única compartilhada para abrir o aplicativo, sem criação de perfis diferenciados. Ela deve ser definida somente em **Secrets** e nunca no GitHub. Para dados fiscais reais, a senha deve ser trocada periodicamente e compartilhada por canal seguro.
 
+A senha SEFAZ agora é salva no campo `sefaz_password` como uma informação comum do cadastro, conforme solicitado. Ela aparece na tabela de empresas e pode ser editada no formulário **Editar empresa selecionada**. Não coloque essa informação em repositórios públicos ou relatórios compartilhados fora da equipe autorizada.
+
 A chave `service_role` será usada somente pelo servidor Streamlit e deve ser cadastrada exclusivamente em **Secrets**. Nunca coloque essa chave no código, no GitHub ou em uma mensagem. Como ela ignora as políticas RLS, proteja o aplicativo com a senha compartilhada e não publique a URL sem controle de acesso.
 
 ## Execução local
@@ -60,7 +62,7 @@ A evolução do download automático deve ser feita somente com serviço oficial
 
 ## Segurança
 
-O aplicativo não grava senha da SEFAZ. O CPF do responsável é usado apenas para gerar um hash no cadastro demonstrativo; o valor original não é exibido. Para uso empresarial, recomenda-se autenticação do próprio Supabase, política de senhas fortes, rotação de segredos, backups, controle de acesso por organização e trilha de auditoria.
+O aplicativo grava a senha SEFAZ no campo `sefaz_password` como informação comum do cadastro, conforme solicitado. O CPF do responsável é usado apenas para gerar um hash; o valor original não é exibido. Mesmo assim, não publique o repositório nem compartilhe relatórios com pessoas não autorizadas.
 
 O projeto não deve conter arquivos fiscais reais, certificados digitais, senhas, tokens ou chaves privadas. O CSV enviado pelo usuário foi mantido apenas como `exemplo_sefaz_ba.csv` para teste local e não deve ser publicado se contiver dados reais.
 
@@ -70,4 +72,4 @@ A primeira versão avalia duplicidade de chave de acesso, chave inválida, valor
 
 ## Próximas etapas
 
-Antes de uso produtivo, deve-se acrescentar autenticação obrigatória, armazenamento de evidências no Supabase Storage, persistência dos achados na tabela `audit_findings`, histórico de consultas, parametrização por empresa e revisão contábil das regras. Certidões e consultas de optantes devem manter a evidência da consulta e a data de verificação.
+Antes de uso produtivo, deve-se acrescentar autenticação obrigatória, armazenamento de evidências no Supabase Storage, persistência dos achados na tabela `audit_findings`, histórico de consultas, parametrização por empresa e revisão contábil das regras. Certidões e consultas de optantes devem manter a evidência da consulta e a data de verificação. Se a tabela `companies` já existir, execute no SQL Editor: `alter table public.companies add column if not exists sefaz_password text;`

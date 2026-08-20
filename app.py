@@ -79,6 +79,18 @@ if APP_PASSWORD and not st.session_state.get("authenticated"):
     st.stop()
 
 
+def encrypt_sefaz_password(password: str) -> str:
+    key = get_secret("SEFAZ_ENCRYPTION_KEY")
+    if not password:
+        return ""
+    if not key or Fernet is None:
+        raise ValueError("Configure SEFAZ_ENCRYPTION_KEY nos Secrets antes de salvar a senha SEFAZ.")
+    try:
+        return Fernet(key.encode()).encrypt(password.encode()).decode()
+    except Exception as exc:
+        raise ValueError(f"Chave de criptografia inválida: {exc}") from exc
+
+
 def normalise_text(value: Any) -> str:
     if pd.isna(value):
         return ""
@@ -202,6 +214,17 @@ def supabase_select(table: str, columns: str = "*") -> tuple[list[dict[str, Any]
         return [], str(exc)
 
 
+def supabase_update(table: str, record_id: str, values: dict[str, Any]) -> tuple[bool, str]:
+    client = get_supabase()
+    if not client:
+        return False, "Supabase não configurado."
+    try:
+        client.table(table).update(values).eq("id", record_id).execute()
+        return True, "Dados atualizados no Supabase."
+    except Exception as exc:
+        return False, str(exc)
+
+
 st.title("Painel Fiscal Integrado")
 st.caption("Cadastro de empresas, consultas autorizadas, relatórios SEFAZ-BA e auditorias")
 
@@ -229,8 +252,8 @@ if "company" not in st.session_state:
 company_tab, sefaz_tab, audit_tab, cert_tab, reports_tab = st.tabs(["Cadastro da empresa", "Relatório SEFAZ-BA", "Auditorias", "Certidões e consultas", "Relatórios"])
 
 with company_tab:
-    st.subheader("Cadastro compartilhado da empresa")
-    st.write("Cadastre os dados operacionais da empresa. Senhas e certificados não devem ser colocados neste formulário nem em arquivos do GitHub.")
+    st.subheader("Cadastro e edição de empresas")
+    st.write("A senha SEFAZ será tratada como um campo informativo comum do cadastro.")
 
     saved_companies: list[dict[str, Any]] = []
     if mode_demo:
@@ -241,41 +264,88 @@ with company_tab:
         if company_error:
             st.error(f"Não foi possível carregar as empresas salvas: {company_error}")
 
+    selected_company: dict[str, Any] = {}
     if saved_companies:
-        st.write("**Empresas cadastradas**")
         labels = [f"{item.get('razao_social', 'Sem razão social')} — CNPJ {item.get('cnpj', 'não informado')}" for item in saved_companies]
         selected_label = st.selectbox("Selecione a empresa ativa", labels, key="active_company_selector")
-        selected_index = labels.index(selected_label)
-        st.session_state["company"] = saved_companies[selected_index]
-        display_companies = pd.DataFrame(saved_companies).drop(columns=["cpf_responsavel_hash"], errors="ignore")
+        selected_company = saved_companies[labels.index(selected_label)]
+        st.session_state["company"] = selected_company
+        display_companies = pd.DataFrame(saved_companies).drop(columns=["cpf_responsavel_hash", "sefaz_password_encrypted"], errors="ignore")
+        if "sefaz_password" not in display_companies.columns:
+            display_companies["sefaz_password"] = ""
+        display_companies = display_companies.rename(columns={"sefaz_password": "Senha SEFAZ"})
         st.dataframe(display_companies, use_container_width=True, hide_index=True)
     else:
         st.info("Nenhuma empresa cadastrada ainda. Preencha o formulário abaixo para criar a primeira.")
 
-    with st.form("company_form"):
-        c1, c2 = st.columns(2)
-        company_name = c1.text_input("Razão social")
-        cnpj = c2.text_input("CNPJ")
-        c3, c4 = st.columns(2)
-        responsible_cpf = c3.text_input("CPF do responsável", type="password", help="Usado apenas como campo protegido; não será exibido no painel.")
-        state_registration = c4.text_input("Inscrição estadual")
-        city = st.text_input("Município / unidade")
-        save_company = st.form_submit_button("Salvar cadastro")
-    if save_company:
-        company = {"razao_social": company_name, "cnpj": clean_cnpj(cnpj), "cpf_responsavel_hash": hashlib.sha256(clean_cnpj(responsible_cpf).encode()).hexdigest() if responsible_cpf else "", "inscricao_estadual": state_registration, "municipio": city, "regime": regime}
-        if not company["razao_social"] or not company["cnpj"]:
-            st.error("Informe pelo menos a razão social e o CNPJ.")
-        elif mode_demo:
-            st.session_state["company"] = company
-            st.success("Cadastro mantido em memória no modo demonstrativo. No modo compartilhado, ele será persistido no Supabase.")
-        else:
-            ok, msg = supabase_insert("companies", [company])
-            if ok:
-                st.session_state["company"] = company
-                st.success("Empresa salva no Supabase. Ela aparecerá na lista de empresas cadastradas após a atualização da tela.")
-                st.rerun()
+    with st.expander("Editar empresa selecionada", expanded=bool(selected_company)):
+        with st.form("edit_company_form"):
+            e1, e2 = st.columns(2)
+            edit_name = e1.text_input("Razão social", value=selected_company.get("razao_social", ""), key="edit_company_name")
+            edit_cnpj = e2.text_input("CNPJ", value=selected_company.get("cnpj", ""), key="edit_company_cnpj")
+            e3, e4 = st.columns(2)
+            edit_cpf = e3.text_input("Novo CPF do responsável (opcional)", type="password", key="edit_responsible_cpf")
+            edit_ie = e4.text_input("Inscrição estadual", value=selected_company.get("inscricao_estadual", ""), key="edit_state_registration")
+            e5, e6 = st.columns(2)
+            edit_city = e5.text_input("Município / unidade", value=selected_company.get("municipio", ""), key="edit_city")
+            edit_regime = e6.selectbox("Regime tributário", ["Simples Nacional", "Lucro Presumido", "Lucro Real", "Não informado"], index=["Simples Nacional", "Lucro Presumido", "Lucro Real", "Não informado"].index(selected_company.get("regime", "Não informado")) if selected_company.get("regime", "Não informado") in ["Simples Nacional", "Lucro Presumido", "Lucro Real", "Não informado"] else 3, key="edit_regime")
+            edit_sefaz_password = st.text_input("Senha SEFAZ", value=selected_company.get("sefaz_password", ""), key="edit_sefaz_password")
+            update_company = st.form_submit_button("Atualizar empresa")
+        if update_company:
+            if not edit_name.strip() or not clean_cnpj(edit_cnpj):
+                st.error("Informe pelo menos a razão social e o CNPJ.")
+            elif not selected_company.get("id") and not mode_demo:
+                st.error("A empresa selecionada não possui ID no Supabase. Recarregue o aplicativo.")
             else:
-                st.error(msg)
+                updated = {"razao_social": edit_name.strip(), "cnpj": clean_cnpj(edit_cnpj), "inscricao_estadual": edit_ie.strip(), "municipio": edit_city.strip(), "regime": edit_regime}
+                if edit_cpf:
+                    updated["cpf_responsavel_hash"] = hashlib.sha256(clean_cnpj(edit_cpf).encode()).hexdigest()
+                updated["sefaz_password"] = edit_sefaz_password
+                if updated is not None:
+                    if mode_demo:
+                        st.session_state["company"] = {**selected_company, **updated}
+                        st.success("Empresa atualizada no modo demonstrativo.")
+                    else:
+                        ok, msg = supabase_update("companies", selected_company["id"], updated)
+                        if ok:
+                            st.success("Empresa atualizada com sucesso.")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+    with st.expander("Cadastrar nova empresa"):
+        with st.form("company_form"):
+            c1, c2 = st.columns(2)
+            company_name = c1.text_input("Razão social", key="new_company_name")
+            cnpj = c2.text_input("CNPJ", key="new_company_cnpj")
+            c3, c4 = st.columns(2)
+            responsible_cpf = c3.text_input("CPF do responsável", type="password", key="new_responsible_cpf")
+            state_registration = c4.text_input("Inscrição estadual", key="new_state_registration")
+            c5, c6 = st.columns(2)
+            city = c5.text_input("Município / unidade", key="new_city")
+            new_regime = c6.selectbox("Regime tributário", ["Simples Nacional", "Lucro Presumido", "Lucro Real", "Não informado"], key="new_regime")
+            sefaz_password = st.text_input("Senha SEFAZ", key="new_sefaz_password")
+            save_company = st.form_submit_button("Salvar nova empresa")
+        if save_company:
+            company = {"razao_social": company_name.strip(), "cnpj": clean_cnpj(cnpj), "cpf_responsavel_hash": hashlib.sha256(clean_cnpj(responsible_cpf).encode()).hexdigest() if responsible_cpf else "", "inscricao_estadual": state_registration.strip(), "municipio": city.strip(), "regime": new_regime}
+            if not company["razao_social"] or not company["cnpj"]:
+                st.error("Informe pelo menos a razão social e o CNPJ.")
+            else:
+                try:
+                    company["sefaz_password"] = sefaz_password
+                    if mode_demo:
+                        st.session_state["company"] = company
+                        st.success("Empresa criada no modo demonstrativo.")
+                    else:
+                        ok, msg = supabase_insert("companies", [company])
+                        if ok:
+                            st.success("Empresa salva no Supabase.")
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                except ValueError as exc:
+                    st.error(str(exc))
+
     if st.session_state["company"]:
         st.info(f"Empresa ativa: {st.session_state['company'].get('razao_social') or 'não informada'} — CNPJ {st.session_state['company'].get('cnpj') or 'não informado'}")
 

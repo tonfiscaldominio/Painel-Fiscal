@@ -8,6 +8,8 @@ create table if not exists public.companies (
   inscricao_estadual text,
   municipio text,
   regime text,
+  sefaz_password_encrypted text,
+  sefaz_password text,
   created_at timestamptz not null default now()
 );
 
@@ -28,6 +30,9 @@ create table if not exists public.sefaz_documents (
   created_at timestamptz not null default now(),
   unique(company_id, chave_acesso, origem_arquivo_hash)
 );
+
+alter table public.companies add column if not exists sefaz_password_encrypted text;
+alter table public.companies add column if not exists sefaz_password text;
 
 create index if not exists idx_sefaz_documents_company on public.sefaz_documents(company_id);
 create index if not exists idx_sefaz_documents_key on public.sefaz_documents(chave_acesso);
