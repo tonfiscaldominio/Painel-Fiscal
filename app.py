@@ -177,6 +177,16 @@ def emit_certidao_sefaz(cnpj: str) -> tuple[bytes | None, str, str]:
         content_type = result.headers.get("content-type", "").lower()
         if "pdf" in content_type or result.content.startswith(b"%PDF"):
             return result.content, f"certidao_sefaz_{digits}.pdf", ""
+        if "text/plain" in content_type or "window.open" in result.text:
+            report_match = re.search(r"window\.open\('([^']+)'", result.text)
+            if report_match:
+                report_url = urljoin(CERTIDAO_URL, report_match.group(1))
+                report_response = session.get(report_url, headers={"Referer": CERTIDAO_URL, "User-Agent": "Mozilla/5.0", "Accept": "application/pdf,text/html;q=0.9,*/*;q=0.8"}, timeout=45)
+                report_type = report_response.headers.get("content-type", "").lower()
+                if "pdf" in report_type or report_response.content.startswith(b"%PDF"):
+                    return report_response.content, f"certidao_sefaz_{digits}.pdf", ""
+                result = report_response
+                content_type = report_type
         result_soup = BeautifulSoup(result.text, "html.parser")
         pdf_link = None
         for link in result_soup.find_all("a", href=True):
