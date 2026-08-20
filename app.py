@@ -142,9 +142,17 @@ def parse_sefaz_csv(uploaded_file) -> pd.DataFrame:
     return df
 
 
+def format_cnpj(cnpj: str) -> str:
+    digits = clean_cnpj(cnpj)
+    if len(digits) != 14:
+        return digits
+    return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:]}"
+
+
 def emit_certidao_sefaz(cnpj: str) -> tuple[bytes | None, str, str]:
     """Submete CNPJ ao formulário público oficial e retorna PDF ou mensagem."""
     digits = clean_cnpj(cnpj)
+    formatted_cnpj = format_cnpj(digits)
     if len(digits) != 14:
         return None, "", "O CNPJ da empresa ativa precisa conter 14 dígitos."
     try:
@@ -160,12 +168,12 @@ def emit_certidao_sefaz(cnpj: str) -> tuple[bytes | None, str, str]:
             name = field.get("name")
             if name and field.get("type", "text").lower() in {"hidden", "text"}:
                 payload[name] = field.get("value", "")
-        payload["ctl00$PHConteudo$TxtNumCNPJ"] = digits
+        payload["ctl00$PHConteudo$TxtNumCNPJ"] = formatted_cnpj
         payload["ctl00$PHConteudo$TxtNumInscricaoEstadual"] = ""
         payload["ctl00$PHConteudo$TxtNumCPF"] = ""
         payload["__EVENTTARGET"] = "ctl00$PHConteudo$btnImprimir"
         payload["__EVENTARGUMENT"] = ""
-        result = session.post(CERTIDAO_URL, data=payload, headers={"Referer": CERTIDAO_URL}, timeout=45, allow_redirects=True)
+        result = session.post(CERTIDAO_URL, data=payload, headers={"Referer": CERTIDAO_URL, "User-Agent": "Mozilla/5.0", "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}, timeout=45, allow_redirects=True)
         content_type = result.headers.get("content-type", "").lower()
         if "pdf" in content_type or result.content.startswith(b"%PDF"):
             return result.content, f"certidao_sefaz_{digits}.pdf", ""
@@ -180,9 +188,10 @@ def emit_certidao_sefaz(cnpj: str) -> tuple[bytes | None, str, str]:
             pdf_response = session.get(pdf_link, headers={"Referer": CERTIDAO_URL}, timeout=45)
             if pdf_response.content.startswith(b"%PDF") or "pdf" in pdf_response.headers.get("content-type", "").lower():
                 return pdf_response.content, f"certidao_sefaz_{digits}.pdf", ""
-        visible_text = " ".join(result_soup.stripped_strings)
-        if "Erro" in visible_text or "não" in visible_text.lower():
-            return None, "", visible_text[-500:]
+        error_box = result_soup.find(id="ASModal_Erro_ASLoadPageModal") or result_soup.find(id="PHConteudo_div_mensagem")
+        visible_text = " ".join(error_box.stripped_strings) if error_box else " ".join(result_soup.stripped_strings)
+        if visible_text:
+            return None, "", f"A SEFAZ-BA não retornou o PDF. Mensagem do portal: {visible_text[-700:]}"
         return None, "", "A SEFAZ-BA não retornou um PDF diretamente. Verifique o resultado no portal oficial."
     except requests.RequestException as exc:
         return None, "", f"Falha de conexão com a SEFAZ-BA: {exc}"
