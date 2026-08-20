@@ -32,6 +32,7 @@ st.set_page_config(page_title="Painel Fiscal Integrado", page_icon="📊", layou
 
 SEFAZ_LOGIN_URL = "https://nfe.sefaz.ba.gov.br/servicos/NFENC/SSL/ASLibrary/Login?ReturnUrl=%2fservicos%2fnfenc%2fModulos%2fAutenticado%2fRestrito%2fNFENC_consulta_destinatario.aspx"
 CERTIDAO_URL = "https://servicos.sefaz.ba.gov.br/sistemas/DSCRE/Modulos/Publico/EmissaoCertidao.aspx"
+FEDERAL_CERTIDAO_URL = "https://servicos.receitafederal.gov.br/servico/certidoes/"
 SIMPLES_URL = "https://www8.receita.fazenda.gov.br/simplesnacional/aplicacoes.aspx?id=21"
 
 SEFAZ_COLUMNS = {
@@ -338,6 +339,7 @@ with st.sidebar:
     st.write("**Consultas externas**")
     st.link_button("Abrir portal NF-e / SEFAZ-BA", SEFAZ_LOGIN_URL)
     st.link_button("Emitir certidão SEFAZ-BA", CERTIDAO_URL)
+    st.link_button("Consultar Certidão Federal", FEDERAL_CERTIDAO_URL)
     st.link_button("Consultar Simples Nacional", SIMPLES_URL)
     if get_supabase() is None and not mode_demo:
         st.warning("Configure SUPABASE_URL e SUPABASE_ANON_KEY em Secrets antes de usar o modo compartilhado.")
@@ -412,7 +414,10 @@ with company_tab:
                             st.success("Empresa atualizada com sucesso.")
                             st.rerun()
                         else:
-                            st.error(msg)
+                            if "sefaz_password" in msg and "schema cache" in msg:
+                                st.error("O Supabase ainda não possui a coluna sefaz_password. Execute no SQL Editor: alter table public.companies add column if not exists sefaz_password text; Depois reinicie o aplicativo.")
+                            else:
+                                st.error(msg)
 
     with st.expander("Cadastrar nova empresa"):
         with st.form("company_form"):
@@ -448,7 +453,18 @@ with company_tab:
                     st.error(str(exc))
 
     if st.session_state["company"]:
-        st.info(f"Empresa ativa: {st.session_state['company'].get('razao_social') or 'não informada'} — CNPJ {st.session_state['company'].get('cnpj') or 'não informado'}")
+        active_for_extension = st.session_state["company"]
+        st.info(f"Empresa ativa: {active_for_extension.get('razao_social') or 'não informada'} — CNPJ {active_for_extension.get('cnpj') or 'não informado'}")
+        extension_payload = {
+            "razao_social": active_for_extension.get("razao_social", ""),
+            "cnpj": active_for_extension.get("cnpj", ""),
+            "inscricao_estadual": active_for_extension.get("inscricao_estadual", ""),
+            "sefaz_password": active_for_extension.get("sefaz_password", "")
+        }
+        if extension_payload["inscricao_estadual"] and extension_payload["sefaz_password"]:
+            st.download_button("Exportar empresa ativa para extensão", json.dumps(extension_payload, ensure_ascii=False, indent=2), "empresa_sefaz_extensao.json", "application/json", help="Importe este arquivo no popup da extensão Chrome/Edge. O arquivo contém a senha SEFAZ.")
+        else:
+            st.warning("Preencha Inscrição estadual e Senha SEFAZ para exportar os dados para a extensão.")
 
 with sefaz_tab:
     st.subheader("Importação do relatório de destinatário da SEFAZ-BA")
@@ -514,6 +530,13 @@ with cert_tab:
     active_company = st.session_state.get("company", {})
     active_cnpj = active_company.get("cnpj", "")
     active_name = active_company.get("razao_social", "")
+    st.markdown("### Certidão de Regularidade Fiscal Federal")
+    st.write("A consulta federal conjunta Receita Federal/PGFN informa a regularidade fiscal perante a Fazenda Nacional. O CNPJ da empresa ativa será usado como referência; a emissão ocorre no portal oficial.")
+    federal_cols = st.columns([2, 1])
+    federal_cols[0].text_input("CNPJ para consulta federal", value=format_cnpj(active_company.get("cnpj", "")) if active_company.get("cnpj") else "", disabled=True, key="federal_cnpj_display")
+    federal_cols[1].link_button("Abrir consulta federal", FEDERAL_CERTIDAO_URL, use_container_width=True)
+    st.caption("No portal oficial, selecione Pessoa Jurídica e informe o CNPJ exibido acima. Depois registre o resultado e anexe a certidão no formulário abaixo.")
+    st.divider()
     if active_cnpj:
         st.info(f"Empresa selecionada: {active_name} — CNPJ preenchido automaticamente: {active_cnpj}")
     else:
@@ -536,7 +559,7 @@ with cert_tab:
     st.write("O CNPJ da empresa ativa é usado no formulário público oficial. Se o navegador bloquear o download automático, use o botão de fallback exibido após o retorno do PDF.")
     q1, q2 = st.columns(2)
     with q1:
-        cert_type = st.selectbox("Tipo de certidão", ["Débitos tributários SEFAZ-BA", "Autenticidade de certidão", "Baixa de inscrição", "Outra"])
+        cert_type = st.selectbox("Tipo de certidão", ["Certidão de Regularidade Fiscal Federal — Receita Federal/PGFN", "Débitos tributários SEFAZ-BA", "Autenticidade de certidão", "Baixa de inscrição", "Outra"])
         cert_status = st.selectbox("Resultado", ["Não consultada", "Negativa", "Positiva", "Positiva com efeito de negativa", "Não se aplica"])
     with q2:
         cert_number = st.text_input("Número da certidão")
