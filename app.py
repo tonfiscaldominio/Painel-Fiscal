@@ -210,22 +210,31 @@ def emit_certidao_sefaz(cnpj: str) -> tuple[bytes | None, str, str]:
 
 
 def auto_download_pdf(pdf_bytes: bytes, filename: str) -> None:
+    """Tenta download e abertura do PDF; o bloqueio pode depender do navegador."""
     encoded = base64.b64encode(pdf_bytes).decode("ascii")
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", filename)
     components.html(
         f"""<script>
-        const data = atob('{encoded}');
-        const bytes = new Uint8Array(data.length);
-        for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i);
-        const blob = new Blob([bytes], {{type: 'application/pdf'}});
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = '{filename}';
-        document.body.appendChild(link);
-        link.click();
-        setTimeout(() => {{ URL.revokeObjectURL(url); link.remove(); }}, 2000);
+        (() => {{
+          const data = atob('{encoded}');
+          const bytes = new Uint8Array(data.length);
+          for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i);
+          const blob = new Blob([bytes], {{type: 'application/pdf'}});
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = '{safe_name}';
+          link.target = '_blank';
+          link.rel = 'noopener';
+          link.textContent = 'Abrir ou baixar certidão';
+          link.style.cssText = 'display:block;padding:8px;font-family:sans-serif';
+          document.body.appendChild(link);
+          try {{ link.click(); }} catch (e) {{ window.open(url, '_blank', 'noopener'); }}
+          setTimeout(() => {{ window.open(url, '_blank', 'noopener'); }}, 350);
+          setTimeout(() => {{ URL.revokeObjectURL(url); }}, 60000);
+        }})();
         </script>""",
-        height=0,
+        height=45,
     )
 
 
@@ -516,9 +525,9 @@ with cert_tab:
         if pdf_bytes:
             st.session_state["last_cert_pdf"] = pdf_bytes
             st.session_state["last_cert_filename"] = pdf_name
-            st.success("Certidão recebida. O download foi iniciado automaticamente.")
+            st.success("Certidão recebida. O aplicativo tentou iniciar o download e abriu uma alternativa compatível com o navegador.")
             auto_download_pdf(pdf_bytes, pdf_name)
-            st.download_button("Baixar novamente a certidão", pdf_bytes, pdf_name, "application/pdf")
+            st.download_button("Baixar certidão", pdf_bytes, pdf_name, "application/pdf")
         else:
             st.error(cert_error)
             st.link_button("Abrir emissão oficial da SEFAZ-BA", CERTIDAO_URL)
