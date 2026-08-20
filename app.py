@@ -543,10 +543,13 @@ with cert_tab:
         cert_expiry = st.date_input("Validade, se houver", value=date.today())
     cert_file = st.file_uploader("Evidência complementar da certidão", type=["pdf", "png", "jpg"], key="cert_file")
     if st.button("Registrar consulta de certidão"):
-        record = {"tipo": cert_type, "resultado": cert_status, "numero": cert_number, "validade": str(cert_expiry), "empresa_cnpj": active_cnpj}
+        if not mode_demo and not active_company.get("id"):
+            st.error("Selecione uma empresa cadastrada no Supabase antes de registrar a certidão.")
+        else:
+            record = {"tipo": cert_type, "resultado": cert_status, "numero": cert_number, "validade": str(cert_expiry), "company_id": active_company.get("id")}
         if mode_demo:
             st.success("Consulta registrada no modo demonstrativo.")
-        else:
+        elif active_company.get("id"):
             ok, msg = supabase_insert("certificates", [record])
             (st.success if ok else st.error)(msg)
 
